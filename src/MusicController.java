@@ -1,23 +1,16 @@
-// MusicController is an Observer (HeartRateInterface + ButtonInterface)
+// MusicController is an Observer
 // and also a Thread (Runnable) that controls the music playback loop.
-
 import java.util.ArrayList;
 
-public class MusicController implements Runnable, HeartRateInterface, ButtonInterface {
+public class MusicController implements Runnable, Observer {
 
-    // =========================
-    // Attributes
-    // =========================
-
-    // Abstract music backend (to be implemented elsewhere)
+    // MusicPlayer backend
     private final MusicPlayer player;
-
-    // Thread control
-    private volatile boolean running = true;
+    private Subject[] subjects; // who to listen to data from
 
     // Tempo control
-    private volatile double targetTempoScale = 1.0;  // desired tempo factor
-    private volatile double currentTempoScale = 1.0; // what the player is currently using
+    private double targetTempoScale = 1.0;  // desired tempo factor
+    private double currentTempoScale = 1.0; // what the player is currently using
 
     // Smoothing for tempo changes (to avoid instant jumps)
     private static final double TEMPO_SMOOTHING_STEP = 0.05; // 5% per update tick
@@ -29,33 +22,26 @@ public class MusicController implements Runnable, HeartRateInterface, ButtonInte
 
     // Optional: simple play/pause state
     private boolean isPaused = false;
+    private boolean running = true;
 
-    // =========================
-    // Constructor
-    // =========================
+    
     private Thread t1;
-    public MusicController(MusicPlayer player, String[] totalSongs) {
+    public MusicController(MusicPlayer player, String[] totalSongs, Subject[] subjects) {
         this.player = player;
         this.totalSongs = totalSongs;
+        this.subjects = subjects; //THIS Class supports multiple subjects!!!!!
+        
+        // register yourself with each subject that exists
+        for (int i = 0; i < subjects.length; i++) {
+        	subjects[i].registerObserver(this); //register yourself!
+        }
         this.t1 = new Thread(this);
         t1.start();
     }
 
-    // =========================
-    // HeartRateInterface implementation
-    // Called by Arduino1Handler (Subject) when heart rate scale is received
-    // =========================
 
-    public void setTempo(float scale) {
-    	player.setTempo(scale);
-    }
-    
-    @Override
-    public synchronized void onHeartRate(double scaleValue) {
-        // Here "scaleValue" is whatever Arduino 1 is sending:
-        // e.g., 0–7 (from SCALE2..0) or a normalized factor.
-        // Map it to a tempo scale factor in a reasonable range.
-
+    public void setTempo(float scaleValue) {
+    	// TODO: MAP FROM [0,5] -> [0.8,1.3]
         // Example mapping:
         //   base = 1.0x
         //   each step adds 0.1x  ->  scale 0 -> 1.0x, scale 5 -> 1.5x, etc.
@@ -65,14 +51,22 @@ public class MusicController implements Runnable, HeartRateInterface, ButtonInte
         targetTempoScale = newTempo;
         System.out.printf("[MusicController] Heart rate scale=%.2f -> target tempo=%.2fx%n",
                 scaleValue, targetTempoScale);
+        player.setTempo(newTempo); //set the tempo
+    }
+    
+    @Override
+    public synchronized void update(ArduinoPacket pkt) {
+    	// CHECK if it's Arduino1
+    	if (pkt.getArduinoID() == 1) {
+    		int scaleValue = pkt.getPayload() & 0x07; // last 3 bits
+    		setTempo(scaleValue); //forward packet to setTempo Method
+    	}
+    	else if (pkt.getArduinoID() == 3) {
+    		int buttonID = (pkt.getPayload() & 0x03);
+    		decodeButtonOP(buttonID);
+    	}
     }
 
-    // =========================
-    // ButtonInterface implementation
-    // Called by Arduino3Handler (Subject) when a button is pressed
-    // =========================
-
-    @Override
     public synchronized void decodeButtonOP(int buttonIndex) {
         // Button mapping example:
         // 0 -> Previous song
@@ -96,10 +90,7 @@ public class MusicController implements Runnable, HeartRateInterface, ButtonInte
         }
     }
 
-    // =========================
-    // Runnable implementation
-    // Main control loop for tempo smoothing
-    // =========================
+    
 
     @Override
     public void run() {
@@ -114,13 +105,12 @@ public class MusicController implements Runnable, HeartRateInterface, ButtonInte
 
         // Main loop: gradually adjust tempo towards targetTempoScale
         while (running) {
+        	smoothTempoTowardsTarget();
             try {
-                smoothTempoTowardsTarget();
-                Thread.sleep(TEMPO_UPDATE_INTERVAL_MS);
-            } catch (InterruptedException e) {
-                // If interrupted, try to stop gracefully
-                running = false;
-            }
+				Thread.sleep(TEMPO_UPDATE_INTERVAL_MS);
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+			}
         }
 
         // Optional: stop playback on exit
@@ -132,9 +122,7 @@ public class MusicController implements Runnable, HeartRateInterface, ButtonInte
     // Public control API
     // =========================
 
-    public void stopController() {
-        running = false;
-    }
+
 
     // =========================
     // Internal helpers (song control)
@@ -207,4 +195,5 @@ public class MusicController implements Runnable, HeartRateInterface, ButtonInte
         System.out.printf("[MusicController] Tempo adjusted: now %.2fx (target %.2fx)%n",
                 currentTempoScale, targetTempoScale);
     }
+
 }
