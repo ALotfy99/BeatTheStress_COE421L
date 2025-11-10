@@ -54,7 +54,7 @@ public class RealtimeTempoPlayer implements MusicPlayer, Runnable {
         }
     }
     
-    private void loadAudioFile(String filePath) throws Exception {
+    public void loadAudioFile(String filePath) throws Exception {
         System.out.println("[Load] Loading: " + filePath);
         
         File file = new File(filePath);
@@ -90,7 +90,7 @@ public class RealtimeTempoPlayer implements MusicPlayer, Runnable {
         System.out.println("[Load] Loaded " + audioSamples.length + " samples");
     }
     
-    private void startPlayback() throws LineUnavailableException {
+    public void startPlayback() throws LineUnavailableException {
         DataLine.Info info = new DataLine.Info(SourceDataLine.class, audioFormat);
         audioLine = (SourceDataLine) AudioSystem.getLine(info);
         audioLine.open(audioFormat);
@@ -215,4 +215,3 @@ public class RealtimeTempoPlayer implements MusicPlayer, Runnable {
         System.out.println("[Tempo] Set to " + String.format("%.2fx", tempoFactor));
     }
 }
-    
