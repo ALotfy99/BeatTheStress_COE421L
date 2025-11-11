@@ -1,0 +1,16 @@
+!SESSION 2025-11-10 11:12:25.122 -----------------------------------------------
+eclipse.buildId=4.36.0.20250605-1300
+java.version=21.0.7
+java.vendor=Eclipse Adoptium
+BootLoader constants: OS=macosx, ARCH=aarch64, WS=cocoa, NL=en_GB
+Framework arguments:  -product org.eclipse.epp.package.dsl.product -keyring /Users/rayyanalnimer/.eclipse_keyring
+Command-line arguments:  -os macosx -ws cocoa -arch aarch64 -product org.eclipse.epp.package.dsl.product -keyring /Users/rayyanalnimer/.eclipse_keyring
+
+!ENTRY ch.qos.logback.classic 1 0 2025-11-10 11:12:26.462
+!MESSAGE Activated before the state location was initialized. Retry after the state location is initialized.
+
+!ENTRY ch.qos.logback.classic 1 0 2025-11-10 11:12:41.693
+!MESSAGE Logback config file: /Users/rayyanalnimer/Desktop/BeatTheStress_COE421L/src/.metadata/.plugins/org.eclipse.m2e.logback/logback.2.7.100.20250418-1315.xml
+
+!ENTRY org.eclipse.mylyn.tasks.ui 2 0 2025-11-10 11:12:44.925
+!MESSAGE No search provider was registered. Tasks search is not available.
