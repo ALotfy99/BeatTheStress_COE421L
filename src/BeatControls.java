@@ -35,15 +35,22 @@ public class BeatControls {
 
     private List<Beat> loadBeatsForSong(int songIndex) {
         List<Beat> list = new ArrayList<>();
-
+        int x = 5;
         switch (songIndex) {
             case 0 -> { // Song 1 – calm starter
-                list.add(new Beat(0.5, 0));
-                list.add(new Beat(1.0, 2));
-                list.add(new Beat(1.5, 1));
-                list.add(new Beat(2.0, 3));
-                list.add(new Beat(2.5, 0));
-                list.add(new Beat(3.0, 2));
+                list.add(new Beat(x, 0));
+                list.add(new Beat(x*2, 2));
+                list.add(new Beat(x*3, 1));
+                list.add(new Beat(x*4, 3));
+                list.add(new Beat(x*5, 0));
+                list.add(new Beat(x*6, 2));
+                list.add(new Beat(x*7, 0));
+                list.add(new Beat(x*8, 2));
+                list.add(new Beat(x*9, 1));
+                list.add(new Beat(x*10, 3));
+                list.add(new Beat(x*11, 0));
+                
+                
             }
             case 1 -> { // Song 2 – moderate tempo
                 list.add(new Beat(0.4, 1));
