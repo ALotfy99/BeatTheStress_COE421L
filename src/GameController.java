@@ -1,6 +1,4 @@
 import javax.swing.*;
-import java.util.ArrayList;
-import java.util.List;
 import jssc.SerialPortException;
 
 /**
@@ -17,9 +15,12 @@ public class GameController implements Observer, BeatObserver {
 
     // ===== Core Game Data =====
     private String playerName;
-    private final List<Integer> courseNumbers = new ArrayList<>();
     private double difficultyScaled = 0;
     private int score = 0;
+
+    // Level management (number of courses = number of levels)
+    private int numLevels = 1;
+    private int currentLevel = 1;
 
     // ===== Devices / Controllers =====
     private final ArduinoHandler[] arduinoHandlers; // ar1, ar2, ar3
@@ -39,7 +40,8 @@ public class GameController implements Observer, BeatObserver {
      * - Launches UI in idle state (waiting for Start Game)
      */
     public GameController(MusicController music, ArduinoHandler... handlers) {
-        if (music == null) throw new IllegalArgumentException("MusicController cannot be null");
+        if (music == null)
+            throw new IllegalArgumentException("MusicController cannot be null");
         if (handlers == null || handlers.length == 0)
             throw new IllegalArgumentException("You must pass ArduinoHandlers");
 
@@ -48,8 +50,9 @@ public class GameController implements Observer, BeatObserver {
 
         // Register as observer to all Arduino subjects
         for (ArduinoHandler h : arduinoHandlers) {
-            if (h == null) continue;
-            h.registerObserver(this); // you are observer to arduino handlers 
+            if (h == null)
+                continue;
+            h.registerObserver(this); // you are observer to arduino handlers
         }
 
         // UI starts first, game not running yet
@@ -64,21 +67,22 @@ public class GameController implements Observer, BeatObserver {
         SwingUtilities.invokeLater(() -> {
             // Start with no BeatController yet. We'll create it after user config.
             ui = new BeatGameUI(null, "Beat The Stress");
-            
+
             // Simple start gate
             int start = JOptionPane.showConfirmDialog(
                     ui,
                     "Press Start to begin the game.",
                     "Start Game",
-                    JOptionPane.OK_CANCEL_OPTION
-            );
+                    JOptionPane.OK_CANCEL_OPTION);
 
             if (start == JOptionPane.OK_OPTION) {
-                configurePlayerAndDifficulty();
-                startGame();
+                configurePlayerAndLevels();
+                currentLevel = 1;
+                startLevel(currentLevel);
             } else {
                 JOptionPane.showMessageDialog(ui, "Game not started.");
             }
+
         });
     }
 
@@ -89,47 +93,36 @@ public class GameController implements Observer, BeatObserver {
      * 3) each course number
      * Then compute rawDifficulty and scale it.
      */
-    private double ScaleConverter(int rawDifficulty) {
-		// TODO Auto-generated method stub
-    	
-		return rawDifficulty - 2;
-	}
-    
-    private void configurePlayerAndDifficulty() {
+    private double ScaleConverter(int difficulty0to5) {
+        // TODO Auto-generated method stub
+
+        return difficulty0to5 - 2.0;
+    }
+
+    private void configurePlayerAndLevels() {
         // Name
         playerName = JOptionPane.showInputDialog(ui, "Enter player name:");
         if (playerName == null || playerName.trim().isEmpty())
             playerName = "Player";
 
-        // # courses
-        int numCourses = readInt("How many courses are you taking?", 1, 30);
-
-        courseNumbers.clear();
-        for (int i = 0; i < numCourses; i++) {
-            int c = readInt("Enter course number #" + (i + 1) + ":", 0, 9999);
-            courseNumbers.add(c);
-        }
-
-        int rawDifficulty = computeRawDifficulty(courseNumbers);
-        difficultyScaled = ScaleConverter(rawDifficulty);
+        // Number of levels (courses)
+        numLevels = readInt("How many courses/levels do you want to play?", 1, 30);
 
         JOptionPane.showMessageDialog(
                 ui,
                 "Player: " + playerName +
-                "\nRaw difficulty = " + rawDifficulty +
-                "\nScaled difficulty = " + difficultyScaled
-        );
+                        "\nNumber of levels: " + numLevels);
     }
 
-    
-
-	private int readInt(String msg, int min, int max) {
+    private int readInt(String msg, int min, int max) {
         while (true) {
             String s = JOptionPane.showInputDialog(ui, msg);
-            if (s == null) return min; // user cancelled -> default
+            if (s == null)
+                return min; // user cancelled -> default
             try {
                 int v = Integer.parseInt(s.trim());
-                if (v < min || v > max) throw new NumberFormatException();
+                if (v < min || v > max)
+                    throw new NumberFormatException();
                 return v;
             } catch (NumberFormatException e) {
                 JOptionPane.showMessageDialog(ui, "Enter a valid integer in range [" + min + ", " + max + "]");
@@ -137,21 +130,30 @@ public class GameController implements Observer, BeatObserver {
         }
     }
 
-    /**
-     * Your rule wasn’t explicit beyond "based on course numbers".
-     * So: rawDifficulty = average(courseNumbers).
-     * Easy to change later.
-     */
-    private int computeRawDifficulty(List<Integer> courses) {
-        if (courses == null || courses.isEmpty()) return 0;
-        long sum = 0;
-        for (int c : courses) sum += c;
-        return (int)(sum / courses.size());
-    }
-
     // ============================================================
     // ===================== GAME START ===========================
     // ============================================================
+
+    private void startLevel(int levelIndex) {
+        // Ask for difficulty in [0,5] for this level
+        int diff = readInt(
+                "Enter difficulty for level " + levelIndex + " (0 = easiest, 5 = hardest):",
+                0,
+                5);
+
+        // Convert [0,5] difficulty → [-2,3] tempo scaling
+        difficultyScaled = ScaleConverter(diff);
+
+        JOptionPane.showMessageDialog(
+                ui,
+                "Starting level " + levelIndex +
+                        "\nPlayer: " + playerName +
+                        "\nDifficulty (0–5) = " + diff +
+                        "\nTempo scaling = " + difficultyScaled);
+
+        // Now start the game for this level
+        startGame();
+    }
 
     private void startGame() {
         try {
@@ -166,15 +168,17 @@ public class GameController implements Observer, BeatObserver {
             // GameController observes BeatController events
             beatController.registerObserver(this);
 
+            // Use the already-computed tempo scaling for this level
+            music.setTempo(difficultyScaled);
+            music.start();
+
             // Re-wire UI to real controller now that it exists
             ui.dispose();
             ui = new BeatGameUI(beatController, "Beat The Stress");
 
-            // Start music
-            music.setTempo(difficultyScaled);
-            music.start();
-
-            System.out.println("[GameController] Game started. Player=" + playerName);
+            System.out.println("[GameController] Game started. Player=" + playerName +
+                    ", level=" + currentLevel +
+                    ", tempoScale=" + difficultyScaled);
         } catch (Exception e) {
             e.printStackTrace();
             JOptionPane.showMessageDialog(ui, "Failed to start game: " + e.getMessage());
@@ -187,31 +191,31 @@ public class GameController implements Observer, BeatObserver {
      */
     private Subject pickHitSubject() {
         // Find first handler that looks like Arduino2 (or just first non-null).
-        return arduinoHandlers[2]; //it's always the 2nd one
+        return arduinoHandlers[2]; // it's always the 2nd one
     }
 
     /**
      * Beatmaps per song (you can expand this).
      */
     private BeatController.Beat[] getBeatmapForSong(int songIndex) {
-    	switch (songIndex) {
-        case 0:
-            return new BeatController.Beat[]{
-                new BeatController.Beat(0),
-                new BeatController.Beat(2),
-                new BeatController.Beat(1)
-            };
+        switch (songIndex) {
+            case 0:
+                return new BeatController.Beat[] {
+                        new BeatController.Beat(0),
+                        new BeatController.Beat(2),
+                        new BeatController.Beat(1)
+                };
 
-        case 1:
-            return new BeatController.Beat[]{
-                new BeatController.Beat(1),
-                new BeatController.Beat(1),
-                new BeatController.Beat(3)
-            };
+            case 1:
+                return new BeatController.Beat[] {
+                        new BeatController.Beat(1),
+                        new BeatController.Beat(1),
+                        new BeatController.Beat(3)
+                };
 
-        default:
-            return BeatController.DEFAULT_BEATMAP;
-    	}
+            default:
+                return BeatController.DEFAULT_BEATMAP;
+        }
     }
 
     // ============================================================
@@ -242,20 +246,31 @@ public class GameController implements Observer, BeatObserver {
             }
         }
 
-        //let UI handle that
+        // let UI handle that
         // If you want UI score update, do it here:
-        //if (ui != null && ui.getPanel() != null) {
-          //  ui.getPanel().setScore(score); // assuming you add this method to panel
-        //}
+        // if (ui != null && ui.getPanel() != null) {
+        // ui.getPanel().setScore(score); // assuming you add this method to panel
+        // }
     }
 
     @Override
     public void onSequenceEnd() {
-        System.out.println("[GameController] Sequence ended.");
-        JOptionPane.showMessageDialog(ui, "Sequence ended!\nFinal score: " + score);
+        System.out.println("[GameController] Sequence ended for level " + currentLevel);
+        JOptionPane.showMessageDialog(
+                ui,
+                "Level " + currentLevel + " ended.\nCurrent score: " + score);
 
-        // stop music if needed
+        // stop/pause music for this level
         music.togglePlayPause();
+
+        if (currentLevel < numLevels) {
+            currentLevel++;
+            startLevel(currentLevel);
+        } else {
+            JOptionPane.showMessageDialog(
+                    ui,
+                    "All levels completed!\nFinal score: " + score);
+        }
     }
 
     // ============================================================
@@ -267,7 +282,8 @@ public class GameController implements Observer, BeatObserver {
      */
     @Override
     public void update(ArduinoPacket pkt) {
-        if (pkt == null) return;
+        if (pkt == null)
+            return;
 
         // Route packets based on source/type.
         // You said:
@@ -278,9 +294,9 @@ public class GameController implements Observer, BeatObserver {
         // So we *ignore* HR for beat judging directly (BeatController handles hits).
         if (pkt instanceof heartRatePacket) {
             music.setTempo(ScaleConverter(pkt.getTempo()));
-            
+
         } else if (pkt instanceof pressurePacket) {
-            // 
+            //
         } else {
             System.out.println("[GameController] Unknown packet: " + pkt);
         }
@@ -301,7 +317,8 @@ public class GameController implements Observer, BeatObserver {
     }
 
     private ArduinoHandler getArduino3() {
-        if (arduinoHandlers.length >= 3) return arduinoHandlers[2];
+        if (arduinoHandlers.length >= 3)
+            return arduinoHandlers[2];
         return null;
     }
 
@@ -309,7 +326,15 @@ public class GameController implements Observer, BeatObserver {
     // ==================== Public getters ========================
     // ============================================================
 
-    public int getScore() { return score; }
-    public double getDifficultyScaled() { return difficultyScaled; }
-    public String getPlayerName() { return playerName; }
+    public int getScore() {
+        return score;
+    }
+
+    public double getDifficultyScaled() {
+        return difficultyScaled;
+    }
+
+    public String getPlayerName() {
+        return playerName;
+    }
 }
