@@ -1,5 +1,6 @@
-public class ArduinoPacket {
-	private byte packet_data;
+abstract public class ArduinoPacket {
+	
+	protected byte packet_data;
 	
 	public ArduinoPacket(byte packet_data) {
 		super();
@@ -11,4 +12,9 @@ public class ArduinoPacket {
 	int getPayload() {
 		return (int) (packet_data & 0x3F); //returns full payload data
 	}
+	public abstract int getTempo();
+	public abstract int getPressureIndex();
+	public abstract int getButtonOP();
+
+
 }
