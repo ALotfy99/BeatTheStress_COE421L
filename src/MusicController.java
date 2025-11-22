@@ -36,28 +36,35 @@ public class MusicController implements Runnable, Observer {
         	subjects[i].registerObserver(this); //register yourself!
         }
         this.t1 = new Thread(this);
-        t1.start();
     }
 
 
-    public void setTempo(float scaleValue) {
+    public void start() {
+        t1.start();
+    }
+    public synchronized void setTempo(double difficultyScaled) {
     	// TODO: MAP FROM [0,5] -> [0.8,1.3]
         // Example mapping:
         //   base = 1.0x
         //   each step adds 0.1x  ->  scale 0 -> 1.0x, scale 5 -> 1.5x, etc.
-        double clamped = Math.max(0.0, Math.min(scaleValue, 7.0));
-        double newTempo = 1.0 + 0.1 * clamped;
+		double clamped = Math.max(-3, Math.min(difficultyScaled, 7.0));
+		double newTempo = 1.0 + 0.1 * clamped;
 
         targetTempoScale = newTempo;
         System.out.printf("[MusicController] Heart rate scale=%.2f -> target tempo=%.2fx%n",
-                scaleValue, targetTempoScale);
-        player.setTempo(newTempo); //set the tempo
+                difficultyScaled, targetTempoScale);
+        //player.setTempo(targetTempoScale); //set the tempo
     }
     
     @Override
     public synchronized void update(ArduinoPacket pkt) {
+    	// CHECK IF GLOBAL EXIT_CODE IS GIVEN
+    	if ((pkt.getArduinoID() << 6 | pkt.getPayload()) == ArduinoHandler.EXIT_CODE) {
+    		stopHandler();
+    	}
     	// CHECK if it's Arduino1
     	if (pkt.getArduinoID() == 1) {
+    		System.out.println("HEY! I GOT ACTIVATED!");
     		int scaleValue = pkt.getPayload() & 0x07; // last 3 bits
     		setTempo(scaleValue); //forward packet to setTempo Method
     	}
@@ -194,6 +201,34 @@ public class MusicController implements Runnable, Observer {
 
         System.out.printf("[MusicController] Tempo adjusted: now %.2fx (target %.2fx)%n",
                 currentTempoScale, targetTempoScale);
+    }
+    
+    // made with help of AI
+    private synchronized void stopHandler() {
+    	
+        System.out.println("[MusicController] Stop requested.");
+
+        // 1. Tell the controller's run() loop to exit
+        this.running = false;
+        
+        // 2. Tell the player to stop playing and release audio resources
+        if (player != null) {
+            player.stop();
+        }
+
+        // 3. Wait for the controller's thread (t1) to finish
+        try {
+            if (t1 != null) {
+                System.out.println("[MusicController] Waiting for controller thread to join...");
+                t1.join(); // Wait for the run() loop to exit
+            }
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+            // Restore the interrupted status
+            Thread.currentThread().interrupt(); 
+        }
+
+        System.out.println("[MusicController] Stop complete.");
     }
 
 }
