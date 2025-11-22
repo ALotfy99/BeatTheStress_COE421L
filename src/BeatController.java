@@ -1,200 +1,319 @@
 // BeatController.java
-// Threaded LED control for Beat The Stress (communicates with Arduino2)
+// Simple beat sequencer + judge for Beat The Stress.
+// One beat at a time, sequential, resolution-driven.
+// Now implements BeatSubject for Observer pattern with BeatDiamondPanel
 
+import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import jssc.SerialPortException;
 
-/**
- * BeatController runs independently from the main game logic.
- * It sends LED commands to Arduino2 at the correct timestamps.
- */
-public class BeatController implements Runnable, Observer {
+public class BeatController implements Runnable, Observer, BeatSubject {
 
-    private static final long HIT_WINDOW_MS = 2000; // judging window (ms)
+    // --- Observer pattern for beat events ---
+    private final List<BeatObserver> beatObservers = new ArrayList<>();
 
-    private final List<BeatControls.Beat> beats;
+    // --- Tunable constants ---
+
+    // ASSUMPTION: Arduino payload is 1..4, we store lanes as 0..3
+    private static final int NUM_LANES = 4;
+
+    // --- Beat definition ---
+    public static class Beat {
+        public final int sensorIndex; // 0..3
+
+        public Beat(int sensorIndex) {
+            this.sensorIndex = sensorIndex;
+        }
+
+        @Override
+        public String toString() {
+            return "Beat{lane=" + sensorIndex + "}";
+        }
+    }
+
+    // --- Beatmap defined inside this class ---
+    static final Beat[] DEFAULT_BEATMAP = new Beat[] {
+        new Beat(0),
+        new Beat(1),
+        new Beat(2),
+        new Beat(3),
+        new Beat(0),
+        new Beat(2),
+        new Beat(1),
+        new Beat(3),
+        new Beat(1),
+        new Beat(1),
+        new Beat(2),
+        new Beat(2),
+        new Beat(3),
+        new Beat(3)
+    };
+
+    // --- Core fields ---
+    private final Beat[] beats;
     private final Subject subject;
-    private boolean running = true;
-    private long startTime;
-    private final Thread t1;
+    private final Thread thread;
 
-    private BeatControls.Beat currentBeat = null;
-    private int currentBeatIndex = -1;
-    private long currentBeatStartMillis = 0;
+    private volatile boolean running = true;
 
+    // shared state for current beat
     private final Object lock = new Object();
+    private Beat currentBeat = null;
+    private int currentBeatIndex = -1;
+    private long currentBeatStartMs = 0;
+    private long currentBeatDeadlineMs = 0;
+    private volatile int beat_interval = 500;
+    private volatile int hit_window = 2000;
 
-    // interval mode
-    private volatile boolean useIntervalMode = false;
-    private volatile double intervalSec = 9.0;
+    private boolean resolved = false;
+    private String lastJudgment = null;
 
-    public BeatController(List<BeatControls.Beat> beats, Subject subject) {
-        this.beats = beats;
+    public BeatController(Subject subject) {
+        this(DEFAULT_BEATMAP, subject);
+    }
+
+    public BeatController(Beat[] beats, Subject subject) {
+        if (beats == null || beats.length == 0) {
+            throw new IllegalArgumentException("Beat array must not be empty");
+        }
+        this.beats = Arrays.copyOf(beats, beats.length);
         this.subject = subject;
         subject.registerObserver(this);
-        t1 = new Thread(this);
-        t1.start();
+
+        thread = new Thread(this, "BeatControllerThread");
+        thread.start();
     }
 
-    public void enableIntervalMode(boolean enabled) {
-        this.useIntervalMode = enabled;
-    }
+    // ===== BeatSubject Implementation =====
 
-    public void setIntervalSec(double intervalSec) {
-        if (intervalSec <= 0) return;
-        this.intervalSec = intervalSec;
-        System.out.println("[BeatController] intervalSec set to " + intervalSec + " s");
+    @Override
+    public void registerObserver(BeatObserver observer) {
+        synchronized (beatObservers) {
+            if (!beatObservers.contains(observer)) {
+                beatObservers.add(observer);
+                System.out.println("[BeatController] Registered BeatObserver: " + observer.getClass().getSimpleName());
+            }
+        }
     }
 
     @Override
-    public void run() {
-        if (beats == null || beats.isEmpty()) {
-            System.err.println("[BeatController] No beats to execute.");
-            return;
+    public void removeObserver(BeatObserver observer) {
+        synchronized (beatObservers) {
+            beatObservers.remove(observer);
+            System.out.println("[BeatController] Removed BeatObserver: " + observer.getClass().getSimpleName());
         }
+    }
 
-        startTime = System.currentTimeMillis();
-        System.out.println("[BeatController] Thread started: " + beats.size() + " beats.");
+    @Override
+    public void notifyBeatObservers(int laneIndex) {
+        List<BeatObserver> observersCopy;
+        synchronized (beatObservers) {
+            observersCopy = new ArrayList<>(beatObservers);
+        }
+        for (BeatObserver observer : observersCopy) {
+            observer.onBeatActivated(laneIndex);
+        }
+    }
 
-        double nextTimeSec = 0.0;
+    @Override
+    public void notifyHitResult(int laneIndex, String judgment) {
+        List<BeatObserver> observersCopy;
+        synchronized (beatObservers) {
+            observersCopy = new ArrayList<>(beatObservers);
+        }
+        for (BeatObserver observer : observersCopy) {
+            observer.onHitResult(laneIndex, judgment);
+        }
+    }
 
-        for (int i = 0; i < beats.size() && running; i++) {
-            BeatControls.Beat beat = beats.get(i);
+    @Override
+    public void notifySequenceEnd() {
+        List<BeatObserver> observersCopy;
+        synchronized (beatObservers) {
+            observersCopy = new ArrayList<>(beatObservers);
+        }
+        for (BeatObserver observer : observersCopy) {
+            observer.onSequenceEnd();
+        }
+    }
 
-            long targetTimeMillis;
-            if (useIntervalMode) {
-                // interval mode: sequential spacing
-                if (i == 0) {
-                    nextTimeSec = intervalSec;
-                } else {
-                    nextTimeSec += intervalSec;
-                }
-                targetTimeMillis = startTime + (long) (nextTimeSec * 1000.0);
-            } else {
-                // chart mode
-                targetTimeMillis = startTime + (long) (beat.timestamp * 1000.0);
+    // ===== Main Game Loop =====
+
+    @Override
+    public void run() {
+        System.out.println("[BeatController] Thread started. beats=" + beats.length);
+
+        for (int i = 0; i < beats.length && running; i++) {
+            Beat beat = beats[i];
+
+            // ---- Activate this beat immediately ----
+            long activationTime = System.currentTimeMillis();
+            long deadline = activationTime + hit_window;
+
+            // update state with all needed variables
+            synchronized (lock) {
+                currentBeat = beat;
+                currentBeatIndex = i;
+                currentBeatStartMs = activationTime;
+                currentBeatDeadlineMs = deadline;
+                resolved = false;
+                lastJudgment = null;
             }
 
-            long now = System.currentTimeMillis();
-            long waitMillis = targetTimeMillis - now;
-            if (waitMillis > 0) {
+            // Notify observers about new beat activation
+            notifyBeatObservers(beat.sensorIndex);
+
+            System.out.printf(
+                "[BeatController] Beat #%d START -> lane=%d, t=%d%n",
+                i, beat.sensorIndex+1, activationTime
+            );
+
+            // ---- Wait for hit or timeout ----
+            synchronized (lock) {
+                while (!resolved && running) {
+                    long now = System.currentTimeMillis();
+                    long remaining = currentBeatDeadlineMs - now;
+
+                    if (remaining <= 0) {
+                        lastJudgment = "MISS (timeout)";
+                        resolved = true;
+                        
+                        // Notify observers of miss
+                        notifyHitResult(beat.sensorIndex, lastJudgment);
+                        break;
+                    }
+
+                    try {
+                        lock.wait(remaining);
+                    } catch (InterruptedException e) {
+                        if (!running) break;
+                    }
+                }
+
+                if (!running) break;
+
+                System.out.printf(
+                    "[BeatController] Beat #%d RESOLVED -> %s%n",
+                    currentBeatIndex,
+                    lastJudgment
+                );
+
+                // clear current beat
+                currentBeat = null;
+                currentBeatIndex = -1;
+                currentBeatStartMs = 0;
+                currentBeatDeadlineMs = 0;
+            }
+
+            // ---- Small delay before next beat ----
+            if (running && i < beats.length - 1 && beat_interval > 0) {
                 try {
-                    Thread.sleep(waitMillis);
+                    Thread.sleep(beat_interval);
                 } catch (InterruptedException e) {
                     if (!running) break;
                 }
             }
-            if (!running) break;
-
-            long activationTime = System.currentTimeMillis();
-            long drift = activationTime - targetTimeMillis;
-
-            byte ledSignal = (byte) (beat.sensorIndex + 1);
-
-            synchronized (lock) {
-                currentBeat = beat;
-                currentBeatIndex = i;
-                currentBeatStartMillis = activationTime;
-            }
-
-            System.out.printf(
-                "[BeatController] TARGET -> LED %d ON | mode=%s beatIdx=%d " +
-                "beatT=%.3fs scheduled=%dms actual=%dms drift=%dms%n",
-                ledSignal,
-                useIntervalMode ? "INTERVAL" : "CHART",
-                i,
-                useIntervalMode ? nextTimeSec : beat.timestamp,
-                targetTimeMillis - startTime,
-                activationTime - startTime,
-                drift
-            );
-
-            // ❌ NO clearing here. Beat stays ‘current’ until next beat.
-            // If you want a visible LED-off on Arduino, handle that there,
-            // but logically this beat remains the one we judge against.
-        }
-
-        // After all beats are done, clear.
-        synchronized (lock) {
-            currentBeat = null;
-            currentBeatIndex = -1;
-            currentBeatStartMillis = 0;
         }
 
         System.out.println("[BeatController] Sequence complete.");
+        
+        // Notify observers that sequence ended
+        notifySequenceEnd();
+        
+        running = false;
     }
+
+    // ===== Observer Implementation (for Arduino packets) =====
+
     @Override
     public void update(ArduinoPacket pkt) {
-        int payload = pkt.getPayload();
-        System.out.println("[BeatListener] Beat triggered: " + payload);
-
-        BeatControls.Beat beatSnapshot;
+        int payload = (pkt.getPayload() & 0x03) + 1; // assumed 1..4
+        
+        Beat beatSnapshot;
         int beatIndexSnapshot;
         long startSnapshot;
-        long beatStartMillisSnapshot;
+        long deadlineSnapshot;
+        boolean alreadyResolved;
 
         synchronized (lock) {
-            beatSnapshot            = currentBeat;
-            beatIndexSnapshot       = currentBeatIndex;
-            startSnapshot           = startTime;
-            beatStartMillisSnapshot = currentBeatStartMillis;
+            beatSnapshot = currentBeat;
+            beatIndexSnapshot = currentBeatIndex;
+            startSnapshot = currentBeatStartMs;
+            deadlineSnapshot = currentBeatDeadlineMs;
+            alreadyResolved = resolved;
         }
 
-        if (beatSnapshot == null) {
-            long now = System.currentTimeMillis();
+        long now = System.currentTimeMillis();
+
+        if (beatSnapshot == null || alreadyResolved) {
             System.out.printf(
-                "[BeatListener] Hit %d but NO active beat (t=%.3fs since start)%n",
-                payload,
-                (now - startSnapshot) / 1000.0
+                "[BeatListener] Stray hit: payload=%d at t=%d (no active beat)%n",
+                payload, now
             );
             return;
         }
 
-        long pressTime = System.currentTimeMillis();
+        // ---- Judge this hit ----
+        boolean correctLane = isCorrectLane(beatSnapshot, payload);
+        long deltaMs = now - startSnapshot;
 
-        // Visual delta (LED-based, mostly for debugging)
-        long deltaVisual = pressTime - beatStartMillisSnapshot;
+        String judgment = null;
 
-        // Chart/tempo reference
-        long targetTimeMillisTimeline;
-        if (useIntervalMode) {
-            // in interval mode, "chart time" ~= activation time
-            targetTimeMillisTimeline = beatStartMillisSnapshot;
-        } else {
-            // chart mode uses Beat.timestamp
-            targetTimeMillisTimeline =
-                    startSnapshot + (long) (beatSnapshot.timestamp * 1000.0);
-        }
-        long deltaTimeline = pressTime - targetTimeMillisTimeline;
-
-        boolean correctLane  = (payload == beatSnapshot.sensorIndex);
-        String judgment;
-
-        if (!correctLane) {
+        if (now > deadlineSnapshot) {
+            judgment = "MISS (too late - after window)";
+        } else if (!correctLane) {
             judgment = "WRONG LANE";
         } else {
-            if (Math.abs(deltaTimeline) <= HIT_WINDOW_MS) {
-                // inside timing window
-                judgment = "GOOD";
-            } else if (deltaTimeline > HIT_WINDOW_MS) {
-                // pressed after the allowed window
-                judgment = "MISS (too late - window passed)";
-            } else { // deltaTimeline < -HIT_WINDOW_MS
-                // pressed before the window even opened
-                judgment = "MISS (too early)";
-            }
+            // correct lane and inside window
+            judgment = "GOOD";
+            
         }
 
+        // Notify all beat observers about the hit result
+        notifyHitResult(payload - 1, judgment); // Convert payload 1..4 to lane 0..3
+
         System.out.printf(
-            "[BeatListener] Beat #%d: expected=%d, got=%d | " +
-            "pressT=%.3fs, deltaVisual=%d ms, deltaTimeline=%d ms -> %s%n",
+            "[BeatListener] Beat #%d HIT: expectedLane=%d (LED=%d), gotPayload=%d, " +
+            "delta=%d ms -> %s%n",
             beatIndexSnapshot,
             beatSnapshot.sensorIndex,
+            beatSnapshot.sensorIndex + 1,
             payload,
-            (pressTime - startSnapshot) / 1000.0,
-            deltaVisual,
-            deltaTimeline,
+            deltaMs,
             judgment
         );
-    } 
+
+        // ---- Resolve beat & wake scheduler ----
+        synchronized (lock) {
+            if (!resolved) {
+                lastJudgment = judgment;
+                resolved = true;
+                lock.notifyAll();
+            }
+        }
+    }
+
+    // --- Helpers ---
+
+    private boolean isCorrectLane(Beat beat, int payload) {
+        // ASSUMPTION: payload is 1..4, beat.sensorIndex is 0..3
+        return payload == beat.sensorIndex + 1;
+    }
+
+    
+    // ===== Utility Methods =====
+    
+    public void stop() {
+        running = false;
+        synchronized (lock) {
+            lock.notifyAll();
+        }
+    }
+    
+    public boolean isRunning() {
+        return running;
+    }
+
+	
 }
