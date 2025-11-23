@@ -4,16 +4,6 @@ import java.awt.event.ActionEvent;
 import java.util.EnumMap;
 
 /**
- * Observer interface for beat game events
- */
-
-
-/**
- * Subject interface for beat game
- */
-
-
-/**
  * Beat Diamond Panel implementing Observer pattern
  */
 public class BeatDiamondPanel extends JPanel implements BeatObserver {
@@ -22,39 +12,36 @@ public class BeatDiamondPanel extends JPanel implements BeatObserver {
 
     private static final int FLASH_MS = 350;
 
-    // configurable title
-    private String title = "Beat your Stress";
-    
-    // score tracking
+    private String title = "Beat the Stress";
     private int score = 0;
+    private String difficultyText = "Easy";
 
-    // required beat (yellow)
     private Lane requiredLane = null;
 
-    // last hit feedback (green/red)
     private Lane lastHitLane = null;
     private Color lastHitColor = null;
     private long lastHitUntil = 0;
     private boolean sequenceEnded = false;
 
+    // NEW: beatmap-changed overlay
+    private String overlayMsg = null;
+    private long overlayUntil = 0;
+    private static final int OVERLAY_MS = 1500;
+
+    // NEW: active beatmap index shown in GUI
+    private int activeBeatmapIndex = 0;
+
     private final Timer repaintTimer;
     private final BeatSubject subject;
 
-    /**
-     * Constructor accepting a subject and registering as observer
-     */
     public BeatDiamondPanel(BeatSubject subject) {
-        this(subject, "Beat your Stress");
+        this(subject, "Beat The Stress");
     }
 
-    /**
-     * Constructor with configurable title
-     */
     public BeatDiamondPanel(BeatSubject subject, String title) {
         this.subject = subject;
         this.title = title;
-        
-        // Register this panel as an observer
+
         subject.registerObserver(this);
 
         setPreferredSize(new Dimension(420, 520));
@@ -64,28 +51,35 @@ public class BeatDiamondPanel extends JPanel implements BeatObserver {
         repaintTimer.start();
     }
 
-    /**
-     * Set the title text
-     */
     public void setTitle(String title) {
         this.title = title;
         repaint();
     }
-
-    /**
-     * Get current score
-     */
-    public int getScore() {
-        return score;
-    }
     
-    public void setScore(int score) {
-        this.score=score;
+    public void setDifficulty(DifficultyStrategy difficulty) {
+        if (difficulty != null) {
+            int level = difficulty.getLevel();
+            switch (level) {
+                case 1:
+                    difficultyText = "Easy";
+                    break;
+                case 2:
+                    difficultyText = "Medium";
+                    break;
+                case 3:
+                    difficultyText = "Hard";
+                    break;
+                default:
+                    difficultyText = difficulty.getDescription();
+            }
+        }
+        repaint();
     }
 
-    /**
-     * Reset score
-     */
+    public int getScore() { return score; }
+
+    public void setScore(int score) { this.score = score; }
+
     public void resetScore() {
         score = 0;
         repaint();
@@ -102,15 +96,16 @@ public class BeatDiamondPanel extends JPanel implements BeatObserver {
     @Override
     public void onHitResult(int laneIndex, String judgment) {
         lastHitLane = indexToLane(laneIndex);
-
         boolean good = "GOOD".equalsIgnoreCase(judgment);
-        lastHitColor = good ? new Color(0x2ECC71) : new Color(0xE74C3C); // green / red
+        lastHitColor = good ? new Color(0x2ECC71) : new Color(0xE74C3C);
         lastHitUntil = System.currentTimeMillis() + FLASH_MS;
 
-        // Update score for successful hits
         if (good) {
             score++;
         }
+        
+        // Clear the yellow highlight after any hit (correct or wrong)
+        requiredLane = null;
 
         repaint();
     }
@@ -121,7 +116,19 @@ public class BeatDiamondPanel extends JPanel implements BeatObserver {
         repaint();
     }
 
-    // ===== Helper Methods =====
+    @Override
+    public void onBeatmapChanged(String msg) {
+        overlayMsg = msg;
+        overlayUntil = System.currentTimeMillis() + OVERLAY_MS;
+        sequenceEnded = false;
+        repaint();
+    }
+
+    @Override
+    public void onBeatmapIndexChanged(int beatmapIndex) {
+        this.activeBeatmapIndex = beatmapIndex;
+        repaint();
+    }
 
     private Lane indexToLane(int idx) {
         return switch (idx) {
@@ -143,29 +150,44 @@ public class BeatDiamondPanel extends JPanel implements BeatObserver {
         int h = getHeight();
         int cx = w / 2;
 
-        // ===== TITLE SECTION =====
+        // ===== TITLE =====
         g2.setFont(getFont().deriveFont(Font.BOLD, 36f));
-        g2.setColor(new Color(0xF1C40F)); // yellow title
+        g2.setColor(new Color(0xF1C40F));
         FontMetrics titleFm = g2.getFontMetrics();
         int titleWidth = titleFm.stringWidth(title);
         g2.drawString(title, (w - titleWidth) / 2, 50);
 
-        // ===== SCORE SECTION =====
+        // ===== DIFFICULTY =====
+        g2.setFont(getFont().deriveFont(Font.BOLD, 18f));
+        g2.setColor(new Color(0xFFD700)); // Gold color for difficulty
+        String diffText = "Difficulty: " + difficultyText;
+        FontMetrics diffFm = g2.getFontMetrics();
+        int diffWidth = diffFm.stringWidth(diffText);
+        g2.drawString(diffText, (w - diffWidth) / 2, 75);
+        
+        // ===== BEATMAP INDEX (NEW) =====
+        g2.setFont(getFont().deriveFont(Font.BOLD, 16f));
+        g2.setColor(new Color(0xDDDDDD));
+        String mapText = "Beatmap: " + activeBeatmapIndex;
+        FontMetrics mapFm = g2.getFontMetrics();
+        int mapWidth = mapFm.stringWidth(mapText);
+        g2.drawString(mapText, (w - mapWidth) / 2, 95);
+
+        // ===== SCORE =====
         g2.setFont(getFont().deriveFont(Font.BOLD, 24f));
-        g2.setColor(new Color(0x2ECC71)); // green score
+        g2.setColor(new Color(0x2ECC71));
         String scoreText = "Score: " + score;
         FontMetrics scoreFm = g2.getFontMetrics();
         int scoreWidth = scoreFm.stringWidth(scoreText);
-        g2.drawString(scoreText, (w - scoreWidth) / 2, 85);
+        g2.drawString(scoreText, (w - scoreWidth) / 2, 120);
 
-        // ===== DIAMOND PADS SECTION =====
-        int cy = h / 2 + 30; // offset down to make room for title/score
+        // ===== DIAMOND PADS =====
+        int cy = h / 2 + 30;
 
         int boxW = (int)(w * 0.22);
         int boxH = (int)(h * 0.22);
         int gap  = (int)(w * 0.18);
 
-        // Positions for diamond
         EnumMap<Lane, Rectangle> rects = new EnumMap<>(Lane.class);
         rects.put(Lane.TOP,    new Rectangle(cx - boxW/2, cy - gap - boxH, boxW, boxH));
         rects.put(Lane.LEFT,   new Rectangle(cx - gap - boxW, cy - boxH/2, boxW, boxH));
@@ -175,33 +197,22 @@ public class BeatDiamondPanel extends JPanel implements BeatObserver {
         long now = System.currentTimeMillis();
         boolean flashActive = lastHitLane != null && now <= lastHitUntil;
 
-        // Draw each lane box
         for (Lane lane : Lane.values()) {
             Rectangle r = rects.get(lane);
 
-            // base dark gray
             Color fill = new Color(0x222222);
 
-            // required beat highlight
-            if (lane == requiredLane) {
-                fill = new Color(0xF1C40F); // yellow
-            }
+            if (lane == requiredLane) fill = new Color(0xF1C40F);
 
-            // last hit flash overrides
-            if (flashActive && lane == lastHitLane) {
-                fill = lastHitColor;
-            }
+            if (flashActive && lane == lastHitLane) fill = lastHitColor;
 
-            // fill
             g2.setColor(fill);
             g2.fillRoundRect(r.x, r.y, r.width, r.height, 26, 26);
 
-            // border
             g2.setStroke(new BasicStroke(4f));
             g2.setColor(new Color(0xDDDDDD));
             g2.drawRoundRect(r.x, r.y, r.width, r.height, 26, 26);
 
-            // lane label (1..4)
             g2.setFont(getFont().deriveFont(Font.BOLD, 28f));
             g2.setColor(Color.WHITE);
 
@@ -218,12 +229,22 @@ public class BeatDiamondPanel extends JPanel implements BeatObserver {
             g2.drawString(label, tx, ty);
         }
 
-        // legend at bottom
         g2.setFont(getFont().deriveFont(Font.PLAIN, 14f));
         g2.setColor(new Color(0xAAAAAA));
         g2.drawString("Required = Yellow | GOOD = Green | WRONG = Red", 10, h - 10);
 
-        // sequence ended overlay
+        // ===== Beatmap changed overlay =====
+        if (overlayMsg != null && now <= overlayUntil) {
+            g2.setColor(new Color(0, 0, 0, 170));
+            g2.fillRect(0, 0, w, h);
+
+            g2.setColor(Color.WHITE);
+            g2.setFont(getFont().deriveFont(Font.BOLD, 26f));
+            int mw = g2.getFontMetrics().stringWidth(overlayMsg);
+            g2.drawString(overlayMsg, (w - mw) / 2, h / 2);
+        }
+
+        // ===== sequence ended overlay =====
         if (sequenceEnded) {
             g2.setColor(new Color(0, 0, 0, 150));
             g2.fillRect(0, 0, w, h);
@@ -234,7 +255,6 @@ public class BeatDiamondPanel extends JPanel implements BeatObserver {
             int msgWidth = g2.getFontMetrics().stringWidth(msg);
             g2.drawString(msg, (w - msgWidth) / 2, h / 2);
 
-            // show final score
             g2.setFont(getFont().deriveFont(Font.BOLD, 24f));
             String finalScore = "Final Score: " + score;
             int fsWidth = g2.getFontMetrics().stringWidth(finalScore);

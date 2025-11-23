@@ -209,8 +209,8 @@ public class RealtimeTempoPlayer implements MusicPlayer, Runnable {
     }
     
     @Override
-    public void setTempo(double factor) {
-        double clamped = Math.max(0.5, Math.min(factor, 2.0));
+    public synchronized void setTempo(double factor) {
+        double clamped = Math.max(-3, Math.min(factor, 2.0));
         tempoFactor = clamped;
         System.out.println("[Tempo] Set to " + String.format("%.2fx", tempoFactor));
     }

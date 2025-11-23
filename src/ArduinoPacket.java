@@ -1,4 +1,4 @@
-abstract public class ArduinoPacket {
+public class ArduinoPacket {
 	
 	protected byte packet_data;
 	
@@ -12,9 +12,7 @@ abstract public class ArduinoPacket {
 	int getPayload() {
 		return (int) (packet_data & 0x3F); //returns full payload data
 	}
-	public abstract int getTempo();
-	public abstract int getPressureIndex();
-	public abstract int getButtonOP();
+	
 
 
 }
